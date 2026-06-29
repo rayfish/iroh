@@ -27,11 +27,28 @@ bytes = "1.11"
 ctutils = { version = "0.4.0", default-features = false }
 data-encoding = "2.2"
 
-derive_more = { version = "2.0.1", features = ["debug", "display", "from", "try_into", "deref", "from_str", "into_iterator"] }
-ed25519-dalek = { version = "=3.0.0-rc.0", features = ["serde", "rand_core", "zeroize", "pkcs8", "pem"] }
+derive_more = { version = "2.0.1", features = [
+  "debug",
+  "display",
+  "from",
+  "try_into",
+  "deref",
+  "from_str",
+  "into_iterator",
+] }
+ed25519-dalek = { version = "=3.0.0-rc.0", features = [
+  "serde",
+  "rand_core",
+  "zeroize",
+  "pkcs8",
+  "pem",
+] }
 http = "1"
 ipnet = "2"
-iroh-base = { version = "1.0.1", default-features = false, features = ["key", "relay"], path = "../iroh-base" }
+iroh-base = { version = "1.0.1", default-features = false, features = [
+  "key",
+  "relay",
+], path = "../iroh-base" }
 iroh-dns = { version = "1.0.1", path = "../iroh-dns" }
 iroh-relay = { version = "1.0.1", path = "../iroh-relay", default-features = false }
 n0-future = "0.3"
@@ -41,22 +58,21 @@ netwatch = "0.19.1"
 papaya = { version = "0.2.3", default-features = false }
 pin-project = "1"
 portable-atomic = "1"
+atomic-waker = "1"
 noq = { version = "1.0.1", default-features = false, features = ["rustls"] }
 noq-proto = { version = "1.0.1", default-features = false }
 noq-udp = { version = "1.0.1", default-features = false }
 rand = "0.10"
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls-no-provider",
+  "stream",
+] }
 rustc-hash = "2"
 rustls = { version = "0.23.33", default-features = false }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 smallvec = "1.11.1"
 strum = { version = "0.28", features = ["derive"] }
-tokio = { version = "1.44.1", features = [
-    "io-util",
-    "macros",
-    "sync",
-    "rt",
-] }
+tokio = { version = "1.44.1", features = ["io-util", "macros", "sync", "rt"] }
 tokio-stream = { version = "0.1.15", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["io-util", "io", "rt"] }
 tracing = "0.1"
@@ -76,15 +92,18 @@ axum = { version = "0.8", optional = true }
 
 hickory-resolver = { version = "0.26.0", default-features = false }
 portmapper = { version = "0.19.1", optional = true, default-features = false }
-noq = { version = "1.0.1", default-features = false, features = ["runtime-tokio", "rustls"] }
+noq = { version = "1.0.1", default-features = false, features = [
+  "runtime-tokio",
+  "rustls",
+] }
 tokio = { version = "1", features = [
-    "io-util",
-    "macros",
-    "sync",
-    "rt",
-    "net",
-    "fs",
-    "io-std",
+  "io-util",
+  "macros",
+  "sync",
+  "rt",
+  "net",
+  "fs",
+  "io-std",
 ] }
 
 # wasm-in-browser dependencies
@@ -109,25 +128,29 @@ axum = { version = "0.8" }
 pretty_assertions = "1.4"
 rand_chacha = "0.10"
 tokio = { version = "1", features = [
-    "io-util",
-    "sync",
-    "rt",
-    "net",
-    "fs",
-    "macros",
-    "time",
-    "test-util",
+  "io-util",
+  "sync",
+  "rt",
+  "net",
+  "fs",
+  "macros",
+  "time",
+  "test-util",
 ] }
 serde_json = "1"
-iroh-relay = { version = "1.0.1", path = "../iroh-relay", default-features = false, features = ["test-utils", "server"] }
+iroh-relay = { version = "1.0.1", path = "../iroh-relay", default-features = false, features = [
+  "test-utils",
+  "server",
+] }
 n0-tracing-test = "0.3"
 clap = { version = "4", features = ["derive"] }
-tracing-subscriber = { version = "0.3", features = [
-    "env-filter",
-] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 indicatif = { version = "0.18", features = ["tokio"] }
 parse-size = { version = "1.1.0", features = ['std'] }
-iroh-base = { version = "1.0.1", default-features = false, features = ["key", "relay"], path = "../iroh-base" }
+iroh-base = { version = "1.0.1", default-features = false, features = [
+  "key",
+  "relay",
+], path = "../iroh-base" }
 console = { version = "0.16" }
 
 # wasm-in-browser test/dev dependencies
@@ -157,7 +180,11 @@ fast-apple-datapath = ["noq/fast-apple-datapath"]
 # Use ring as the crypto backend.
 tls-ring = ["noq/ring", "iroh-relay/tls-ring", "iroh-dns/tls-ring"]
 # Use aws-lc-rs as the crypto backend, unless `ring` is also enabled.
-tls-aws-lc-rs = ["noq/aws-lc-rs", "iroh-relay/tls-aws-lc-rs", "iroh-dns/tls-aws-lc-rs"]
+tls-aws-lc-rs = [
+  "noq/aws-lc-rs",
+  "iroh-relay/tls-aws-lc-rs",
+  "iroh-dns/tls-aws-lc-rs",
+]
 # Unstable: Custom transport API (may change without notice)
 unstable-custom-transports = []
 # Unstable: API to access an endpoint's NetReport (may change without notice)
@@ -169,28 +196,28 @@ rustdoc-args = ["--cfg", "iroh_docsrs"]
 
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [
-    # workspace crates
-    "iroh_base::*",
-    "iroh_dns::*",
-    "iroh_relay::*",
-    # crates owned by us that will move to 1.0 as well
-    "iroh_metrics::*",
-    "n0_error::*",
-    "n0_watcher::*",
-    "noq::*",
-    "noq_proto::*",
-    "noq_udp::*",
-    # 1.0 crates that we deem fine to be part of the public API
-    "bytes::*",
-    "http::*",
-    "serde_core::*",
-    "tokio::*",
-    "url::*",
-    # non-1.0 crates that we decided to accept in the public API
-    "rustls::*",
-    "futures_core::stream::Stream",
-    # only type alias
-    "futures_lite::stream::Boxed",
+  # workspace crates
+  "iroh_base::*",
+  "iroh_dns::*",
+  "iroh_relay::*",
+  # crates owned by us that will move to 1.0 as well
+  "iroh_metrics::*",
+  "n0_error::*",
+  "n0_watcher::*",
+  "noq::*",
+  "noq_proto::*",
+  "noq_udp::*",
+  # 1.0 crates that we deem fine to be part of the public API
+  "bytes::*",
+  "http::*",
+  "serde_core::*",
+  "tokio::*",
+  "url::*",
+  # non-1.0 crates that we decided to accept in the public API
+  "rustls::*",
+  "futures_core::stream::Stream",
+  # only type alias
+  "futures_lite::stream::Boxed",
 ]
 
 [[test]]

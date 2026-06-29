@@ -2263,6 +2263,7 @@ dependencies = [
 name = "iroh"
 version = "1.0.1"
 dependencies = [
+ "atomic-waker",
  "axum",
  "backon",
  "blake3",

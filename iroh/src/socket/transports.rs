@@ -1066,13 +1066,24 @@ impl TransportsSender {
                 }
             }
             FourTuple::Custom { remote, local } => {
+                let mut has_valid_sender = false;
+                let mut any_pending = false;
                 for sender in &mut self.custom {
                     if sender.is_valid_send_addr(remote) {
+                        has_valid_sender = true;
                         match sender.poll_send(cx, remote, local.as_ref(), transmit) {
-                            Poll::Pending => {}
+                            Poll::Pending => any_pending = true,
                             Poll::Ready(res) => return Poll::Ready(res),
                         }
                     }
+                }
+                if has_valid_sender && any_pending {
+                    // A custom transport is valid for this destination but currently
+                    // unable to accept (e.g. its send buffer is full). Unlike relay,
+                    // there is at most one custom transport per address, so there is no
+                    // alternative to defer to — propagate `Pending` so noq stashes the
+                    // transmit in `buffered_transmit` and retries on the next wake.
+                    return Poll::Pending;
                 }
             }
         }
@@ -1330,11 +1341,22 @@ impl noq::UdpSender for Sender {
                 Poll::Ready(Ok(()))
             }
             Poll::Pending => {
-                // We do not want to block the next send which might be on a
-                // different transport.  Instead we let Noq handle this as a lost
-                // datagram.
+                // For a direct IP or custom transport there is no alternative transport
+                // to defer to — the "drop to Ok so another path can try" rationale
+                // below does not apply. Propagate `Pending` so noq's `drive_transmit`
+                // stashes the transmit in `buffered_transmit` and retries on the next
+                // socket-writable wake. Without this, an already-encrypted,
+                // already-congestion-accounted packet would be silently dropped at
+                // the iroh layer while noq (having received `Ok`) believes it was
+                // sent — defeating noq's own backpressure path.
+                if matches!(network_path, FourTuple::Ip { .. } | FourTuple::Custom { .. }) {
+                    trace!(dst=%network_path, "transport pending, propagating to noq");
+                    return Poll::Pending;
+                }
+                // Relay: there may be an alternative path to try, so drop to Ok and
+                // let noq treat the packet as lost.
                 // TODO: Revisit this: we might want to do something better.
-                trace!(dst=%network_path, "transport pending, dropped transmit");
+                trace!(dst=%network_path, "relay transport pending, dropped transmit");
                 Poll::Ready(Ok(()))
             }
         }

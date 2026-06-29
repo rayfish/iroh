@@ -6,6 +6,7 @@
 use std::{
     collections::BTreeMap,
     io,
+    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     task::Poll,
 };
@@ -36,6 +37,34 @@ pub(crate) struct Packet {
     pub(crate) from: CustomAddr,
 }
 
+/// A gate that, when closed, makes [`TestSender::poll_send`] return `Poll::Pending`,
+/// simulating a UDP send buffer returning `EAGAIN`/`EWOULDBLOCK`. Used to test iroh's
+/// handling of transport-level backpressure.
+#[derive(Debug, Default)]
+struct SendGate {
+    closed: AtomicBool,
+    waker: atomic_waker::AtomicWaker,
+}
+
+impl SendGate {
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    fn open(&self) {
+        self.closed.store(false, Ordering::Release);
+        self.waker.wake();
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    fn register(&self, waker: &std::task::Waker) {
+        self.waker.register(waker);
+    }
+}
+
 /// A test transport for use with [`TestNetwork`].
 ///
 /// Implements [`CustomTransport`] and [`CustomEndpoint`] for testing.
@@ -44,6 +73,7 @@ pub struct TestTransport {
     id: EndpointId,
     id_watchable: n0_watcher::Watchable<Vec<CustomAddr>>,
     network: TestNetwork,
+    send_gate: Arc<SendGate>,
 }
 
 impl Preset for Arc<TestTransport> {
@@ -115,6 +145,7 @@ impl TestNetwork {
             id_watchable: n0_watcher::Watchable::new(vec![id_custom]),
             network: self.clone(),
             id,
+            send_gate: Arc::new(SendGate::default()),
         }))
     }
 }
@@ -165,6 +196,7 @@ impl AddressLookup for TestAddrLookup {
 struct TestSender {
     id: EndpointId,
     network: TestNetwork,
+    send_gate: Arc<SendGate>,
 }
 
 /// Converts an endpoint ID to a custom address for this test transport.
@@ -232,13 +264,35 @@ impl CustomSender for TestSender {
 
     fn poll_send(
         &self,
-        _cx: &mut std::task::Context,
+        cx: &mut std::task::Context,
         dst: &CustomAddr,
         _src: Option<&CustomAddr>,
         transmit: &Transmit<'_>,
     ) -> Poll<io::Result<()>> {
+        // When the send gate is closed, simulate a UDP send buffer returning
+        // EAGAIN/EWOULDBLOCK: register the waker and return Pending. This lets
+        // tests verify that iroh propagates Pending to noq (which retries) rather
+        // than silently dropping the transmit.
+        if self.send_gate.is_closed() {
+            self.send_gate.register(cx.waker());
+            return Poll::Pending;
+        }
         let packets = self.split(transmit).collect();
         Poll::Ready(self.send_sync(dst, packets))
+    }
+}
+
+impl TestTransport {
+    /// Closes the send gate: subsequent calls to `poll_send` will return
+    /// `Poll::Pending` (simulating a full UDP send buffer / `WouldBlock`).
+    pub fn close_send_gate(&self) {
+        self.send_gate.close();
+    }
+
+    /// Opens the send gate and wakes any parked sender, allowing queued
+    /// transmits to proceed.
+    pub fn open_send_gate(&self) {
+        self.send_gate.open();
     }
 }
 
@@ -257,6 +311,7 @@ impl CustomEndpoint for TestTransport {
         Arc::new(TestSender {
             id: self.id,
             network: self.network.clone(),
+            send_gate: self.send_gate.clone(),
         })
     }
 
@@ -737,6 +792,108 @@ mod tests {
         );
 
         verify_echo(&conn, b"custom wins over relay").await?;
+        conn.close(0u32.into(), b"done");
+        router.shutdown().await.anyerr()?;
+        Ok(())
+    }
+
+    /// A handler that echoes datagrams back over the connection it received them on.
+    #[derive(Debug, Clone)]
+    struct DatagramEcho;
+
+    impl ProtocolHandler for DatagramEcho {
+        async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+            loop {
+                match connection.read_datagram().await {
+                    Ok(d) => {
+                        if connection.send_datagram(d).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            connection.closed().await;
+            Ok(())
+        }
+    }
+
+    /// Reproduces the `Poll::Pending` → `Poll::Ready(Ok(()))` drop bug in
+    /// `Sender::poll_send` (`iroh/src/socket/transports.rs`).
+    ///
+    /// When the underlying transport returns `Poll::Pending` (simulating a UDP send
+    /// buffer returning `EAGAIN`/`EWOULDBLOCK`), iroh converts it to `Ok(())` before
+    /// noq ever sees it. noq then treats the transmit as sent (it has already run
+    /// congestion accounting), the packet is silently dropped at the iroh layer, and
+    /// noq never retries it — defeating noq's own `buffered_transmit` backpressure
+    /// path. The fix is to propagate `Pending` so noq stashes the transmit and
+    /// retries on the next socket-writable wake.
+    ///
+    /// This test sends a datagram while the sender's transport gate is closed
+    /// (Pending), then opens the gate. If iroh propagated `Pending` correctly, noq
+    /// retries and the datagram arrives at the peer. With the bug, the datagram is
+    /// dropped and the assertion times out.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_pending_propagated_not_dropped() -> Result<()> {
+        let network = TestNetwork::new();
+        let s1 = SecretKey::generate();
+        let s2 = SecretKey::generate();
+
+        let t1 = network.create_transport(s1.public())?;
+        let t2 = network.create_transport(s2.public())?;
+
+        let ep1 = endpoint_builder(s1, t1.clone(), EndpointConfig::default())
+            .bind()
+            .await?;
+        let ep2 = endpoint_builder(s2.clone(), t2, EndpointConfig::default())
+            .bind()
+            .await?;
+        let router = Router::builder(ep2).accept(ECHO_ALPN, DatagramEcho).spawn();
+
+        let conn = ep1
+            .connect(custom_only_addr(s2.public()), ECHO_ALPN)
+            .await?;
+
+        // Sanity: a datagram flows when the gate is open.
+        let payload = bytes::Bytes::from_static(b"ping");
+        conn.send_datagram(payload.clone())
+            .map_err(|e| n0_error::AnyError::from_display(format!("sanity send failed: {e}")))?;
+        let echoed = tokio::time::timeout(Duration::from_secs(2), conn.read_datagram())
+            .await
+            .map_err(|_| n0_error::AnyError::from_display("sanity datagram timed out"))?
+            .map_err(|e| n0_error::AnyError::from_display(format!("sanity read failed: {e}")))?;
+        assert_eq!(echoed, payload);
+
+        // Now close the sender's gate: poll_send returns Pending (WouldBlock).
+        t1.close_send_gate();
+
+        // Send while the transport is blocked. With the bug, iroh converts Pending →
+        // Ok and noq believes the datagram was sent; it is never retried and never
+        // arrives. With the fix, noq stashes it in buffered_transmit and retries
+        // once the gate opens.
+        let payload2 = bytes::Bytes::from_static(b"pong");
+        // send_datagram is non-blocking; it just queues into noq's datagram buffer.
+        // The drop (bug) happens when noq's driver tries to transmit it onto the
+        // wire and calls iroh's poll_send, which returns Ok despite Pending.
+        conn.send_datagram(payload2.clone())
+            .map_err(|e| n0_error::AnyError::from_display(format!("send under backpressure failed: {e}")))?;
+
+        // Give the driver a moment to attempt the (blocked) transmit.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Open the gate — a correct implementation retries and the datagram arrives.
+        t1.open_send_gate();
+
+        let echoed2 = tokio::time::timeout(Duration::from_secs(2), conn.read_datagram())
+            .await
+            .map_err(|_| n0_error::AnyError::from_display("datagram sent under backpressure was dropped (Pending not propagated)"))?
+            .map_err(|e| n0_error::AnyError::from_display(format!("read after gate open failed: {e}")))?;
+        assert_eq!(
+            echoed2, payload2,
+            "datagram sent while transport was Pending should arrive after the gate opens"
+        );
+
         conn.close(0u32.into(), b"done");
         router.shutdown().await.anyerr()?;
         Ok(())
