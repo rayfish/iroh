@@ -64,3 +64,8 @@ n0-error = { git = "https://github.com/n0-computer/n0-error" }
 # netwatch's ConfigureSocket hook (upstream PR n0-computer/net-tools#182); drop
 # this patch once a netwatch release carries it.
 netwatch = { git = "https://github.com/rayfish/net-tools", branch = "feat/configure-socket" }
+# noq's batch datagram APIs (upstream PR n0-computer/noq#735); drop these once a
+# noq release carries them.
+noq = { git = "https://github.com/rayfish/noq", branch = "perf/datagram-batching" }
+noq-proto = { git = "https://github.com/rayfish/noq", branch = "perf/datagram-batching" }
+noq-udp = { git = "https://github.com/rayfish/noq", branch = "perf/datagram-batching" }
