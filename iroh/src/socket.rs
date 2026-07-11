@@ -199,6 +199,12 @@ pub(crate) struct Options {
 
     /// Optional filter dropping gathered local interface addresses (e.g. VPN overlay IPs).
     pub(crate) direct_addr_filter: Option<Arc<dyn crate::endpoint::DirectAddrFilter>>,
+
+    /// Optional fwmark applied to the underlay UDP sockets (Linux `SO_MARK`).
+    ///
+    /// Lets the caller policy-route iroh's own traffic, for example around a
+    /// full-tunnel default route. `None` leaves the sockets unmarked.
+    pub(crate) socket_mark: Option<u32>,
 }
 
 /// Inner state for an iroh [`crate::Endpoint`].
@@ -899,6 +905,7 @@ impl EndpointInner {
             static_config,
             configured_addrs,
             direct_addr_filter,
+            socket_mark,
         } = opts;
 
         let address_lookup = address_lookup::AddressLookupServices::default();
@@ -948,6 +955,7 @@ impl EndpointInner {
             relay_actor_config,
             &metrics,
             shutdown_token.child_token(),
+            socket_mark,
         )
         .map_err(|err| e!(BindError::Sockets, err))?;
 
@@ -2201,6 +2209,7 @@ mod tests {
             static_config,
             configured_addrs: Default::default(),
             direct_addr_filter: None,
+            socket_mark: None,
         }
     }
 
@@ -2683,6 +2692,7 @@ mod tests {
             static_config,
             configured_addrs: Default::default(),
             direct_addr_filter: None,
+            socket_mark: None,
         };
         let sock = EndpointInner::bind(opts).await?;
         Ok(sock)
