@@ -12,7 +12,7 @@ use bytes::Bytes;
 use iroh_base::{CustomAddr, EndpointId, RelayUrl, TransportAddr};
 use iroh_relay::RelayMap;
 #[cfg(not(wasm_browser))]
-use netwatch::ConfigureSocket;
+use netwatch::SocketConfigurator;
 use n0_watcher::Watcher;
 use relay::{RelayNetworkChangeSender, RelaySender};
 use tokio_util::sync::CancellationToken;
@@ -195,7 +195,7 @@ impl Transports {
         relay_actor_config: RelayActorConfig,
         metrics: &EndpointMetrics,
         shutdown_token: CancellationToken,
-        #[cfg(not(wasm_browser))] configure_socket: Option<ConfigureSocket>,
+        #[cfg(not(wasm_browser))] configure_socket: Option<Arc<dyn SocketConfigurator>>,
     ) -> io::Result<Self> {
         #[cfg(not(wasm_browser))]
         let ip_configs = {

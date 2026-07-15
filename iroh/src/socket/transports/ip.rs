@@ -9,14 +9,14 @@ use std::{
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use n0_watcher::Watchable;
-use netwatch::{BindOptions, ConfigureSocket, UdpSender, UdpSocket};
+use netwatch::{BindOptions, SocketConfigurator, UdpSender, UdpSocket};
 use pin_project::pin_project;
 use tracing::{debug, info, trace};
 
 use super::{RecvInfo, Transmit};
 use crate::metrics::{EndpointMetrics, SocketMetrics};
 
-fn bind_opts(configure_socket: Option<ConfigureSocket>) -> BindOptions {
+fn bind_opts(configure_socket: Option<Arc<dyn SocketConfigurator>>) -> BindOptions {
     match configure_socket {
         Some(configure) => BindOptions::new().configure_socket(configure),
         None => BindOptions::new(),
@@ -171,7 +171,7 @@ impl IpTransport {
     pub(crate) fn bind(
         config: Config,
         metrics: Arc<SocketMetrics>,
-        configure_socket: Option<ConfigureSocket>,
+        configure_socket: Option<Arc<dyn SocketConfigurator>>,
     ) -> io::Result<Self> {
         let addr: SocketAddr = config.into();
         debug!(?addr, "binding");
@@ -421,7 +421,7 @@ impl IpTransports {
     pub(super) fn bind(
         configs: impl Iterator<Item = Config>,
         metrics: &EndpointMetrics,
-        configure_socket: Option<ConfigureSocket>,
+        configure_socket: Option<Arc<dyn SocketConfigurator>>,
     ) -> io::Result<Self> {
         let mut has_v4_default = false;
         let mut ip_v4 = Vec::new();

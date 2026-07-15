@@ -161,21 +161,42 @@ pub struct ClientBuilder {
     dns_resolver: DnsResolver,
     /// Cache for public keys of remote endpoints.
     key_cache: KeyCache,
-    /// Hook run on the dialed socket before it connects.
+    /// Configurator run on the dialed socket before it connects.
     #[cfg(not(wasm_browser))]
-    #[debug("configure socket callback")]
-    configure_socket: Option<ConfigureSocket>,
+    #[debug("socket configurator")]
+    configure_socket: Option<Arc<dyn SocketConfigurator>>,
 }
 
-/// A hook run on the socket used to reach the relay, before it is connected.
+/// Configures the socket used to reach the relay, before it is connected.
 ///
-/// Mirrors `netwatch::ConfigureSocket`, which is the same type, but is declared here
-/// so this crate does not have to depend on netwatch (it also builds for the browser).
-/// See [`ClientBuilder::configure_socket`].
+/// Mirrors `netwatch::SocketConfigurator`, but is declared here so this crate does
+/// not have to depend on netwatch (it also builds for the browser). Any
+/// `Fn(SockRef<'_>, socket2::Domain) -> io::Result<()> + Send + Sync + 'static`
+/// closure implements it. See [`ClientBuilder::configure_socket`].
 #[cfg(not(wasm_browser))]
-pub type ConfigureSocket = Arc<
-    dyn Fn(socket2::SockRef<'_>, socket2::Domain) -> std::io::Result<()> + Send + Sync + 'static,
->;
+pub trait SocketConfigurator: Send + Sync + 'static {
+    /// Called on the socket after it is created and before it is connected.
+    /// Returning an error fails the dial.
+    fn configure(
+        &self,
+        socket: socket2::SockRef<'_>,
+        domain: socket2::Domain,
+    ) -> std::io::Result<()>;
+}
+
+#[cfg(not(wasm_browser))]
+impl<F> SocketConfigurator for F
+where
+    F: Fn(socket2::SockRef<'_>, socket2::Domain) -> std::io::Result<()> + Send + Sync + 'static,
+{
+    fn configure(
+        &self,
+        socket: socket2::SockRef<'_>,
+        domain: socket2::Domain,
+    ) -> std::io::Result<()> {
+        self(socket, domain)
+    }
+}
 
 impl ClientBuilder {
     /// Create a new [`ClientBuilder`]
@@ -199,15 +220,16 @@ impl ClientBuilder {
         }
     }
 
-    /// Sets a hook to run on the socket used to reach the relay, before it connects.
+    /// Sets a [`SocketConfigurator`] to run on the socket used to reach the relay,
+    /// before it connects.
     ///
     /// Its purpose is to let the caller decide how this connection is routed. A VPN that
     /// points the default route at its own tunnel device needs to keep the relay
     /// connection off that route, the same as it does for the UDP transport, otherwise
     /// the connection is routed into the tunnel it is carrying.
     #[cfg(not(wasm_browser))]
-    pub fn configure_socket(mut self, configure: ConfigureSocket) -> Self {
-        self.configure_socket = Some(configure);
+    pub fn configure_socket(mut self, configurator: impl SocketConfigurator) -> Self {
+        self.configure_socket = Some(Arc::new(configurator));
         self
     }
 

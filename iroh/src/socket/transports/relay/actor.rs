@@ -51,7 +51,7 @@ use n0_future::{
     time::{self, Duration, Instant, MissedTickBehavior},
 };
 #[cfg(not(wasm_browser))]
-use netwatch::ConfigureSocket;
+use netwatch::SocketConfigurator;
 use n0_watcher::Watchable;
 use netwatch::interfaces;
 use tokio::sync::{mpsc, oneshot};
@@ -212,7 +212,7 @@ struct RelayConnectionOptions {
     auth_token: Option<String>,
     #[cfg(not(wasm_browser))]
     #[debug(skip)]
-    configure_socket: Option<ConfigureSocket>,
+    configure_socket: Option<Arc<dyn SocketConfigurator>>,
 }
 
 /// Possible reasons for a failed relay connection.
@@ -323,10 +323,22 @@ impl ActiveRelayActor {
         }
 
         // Keep the relay connection on the same egress path as the UDP transport: it is
-        // just as fatal to route it into a tunnel it is carrying.
+        // just as fatal to route it into a tunnel it is carrying. The newtype bridges
+        // netwatch's SocketConfigurator to iroh-relay's own copy of the trait
+        // (iroh-relay cannot depend on netwatch: it also builds for the browser).
         #[cfg(not(wasm_browser))]
         if let Some(configure) = configure_socket {
-            builder = builder.configure_socket(configure);
+            struct Bridge(Arc<dyn SocketConfigurator>);
+            impl relay::client::SocketConfigurator for Bridge {
+                fn configure(
+                    &self,
+                    socket: socket2::SockRef<'_>,
+                    domain: socket2::Domain,
+                ) -> std::io::Result<()> {
+                    self.0.configure(socket, domain)
+                }
+            }
+            builder = builder.configure_socket(Bridge(configure));
         }
         builder
     }
@@ -896,7 +908,7 @@ pub(crate) struct Config {
     /// Hook run on the relay connection's socket before it is connected.
     #[cfg(not(wasm_browser))]
     #[debug(skip)]
-    pub configure_socket: Option<ConfigureSocket>,
+    pub configure_socket: Option<Arc<dyn SocketConfigurator>>,
 }
 
 /// Connection state of the home relay.

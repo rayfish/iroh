@@ -20,7 +20,9 @@ use n0_future::{
 };
 use rustls::client::Resumption;
 
-use super::ConfigureSocket;
+use std::sync::Arc;
+
+use super::SocketConfigurator;
 use tokio::net::TcpStream;
 use tracing::{Instrument, error, info_span};
 
@@ -38,7 +40,7 @@ pub(super) struct MaybeTlsStreamBuilder {
     prefer_ipv6: bool,
     tls_config: rustls::ClientConfig,
     #[debug(skip)]
-    configure_socket: Option<ConfigureSocket>,
+    configure_socket: Option<Arc<dyn SocketConfigurator>>,
 }
 
 impl MaybeTlsStreamBuilder {
@@ -57,7 +59,7 @@ impl MaybeTlsStreamBuilder {
         }
     }
 
-    pub(super) fn configure_socket(mut self, configure: Option<ConfigureSocket>) -> Self {
+    pub(super) fn configure_socket(mut self, configure: Option<Arc<dyn SocketConfigurator>>) -> Self {
         self.configure_socket = configure;
         self
     }
@@ -267,7 +269,7 @@ async fn dial_happy_eyeballs(
     dns_resolver: &DnsResolver,
     url: &Url,
     prefer_ipv6: bool,
-    configure_socket: Option<&ConfigureSocket>,
+    configure_socket: Option<&Arc<dyn SocketConfigurator>>,
 ) -> Result<TcpStream, DialError> {
     let port = url_port(url).ok_or_else(|| e!(DialError::InvalidTargetPort))?;
 
@@ -432,7 +434,7 @@ mod tests {
 
         let addrs = (1..5).map(dead_v4).chain([Ipv4Addr::LOCALHOST]).collect();
         let resolver = static_resolver(addrs, vec![]);
-        let stream = dial_happy_eyeballs(&resolver, &relay_url(port), false)
+        let stream = dial_happy_eyeballs(&resolver, &relay_url(port), false, None)
             .await
             .expect("should skip the invalid addrs and still connect");
         assert_eq!(stream.peer_addr().unwrap().ip(), Ipv4Addr::LOCALHOST);
@@ -445,7 +447,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let resolver = static_resolver(vec![Ipv4Addr::LOCALHOST], vec![dead_v6(1), dead_v6(2)]);
 
-        let stream = dial_happy_eyeballs(&resolver, &relay_url(port), true)
+        let stream = dial_happy_eyeballs(&resolver, &relay_url(port), true, None)
             .await
             .expect("falls back to IPv4");
         assert!(stream.peer_addr().unwrap().is_ipv4());
@@ -454,7 +456,7 @@ mod tests {
     #[tokio::test]
     async fn errors_when_all_addresses_unreachable() {
         let resolver = static_resolver(vec![dead_v4(1), dead_v4(2)], vec![dead_v6(1)]);
-        let err = dial_happy_eyeballs(&resolver, &relay_url(80), true)
+        let err = dial_happy_eyeballs(&resolver, &relay_url(80), true, None)
             .await
             .expect_err("nothing reachable");
         dbg!(&err);
@@ -467,14 +469,14 @@ mod tests {
     #[tokio::test]
     async fn errors_when_nothing_resolves() {
         let resolver = static_resolver(vec![], vec![]);
-        let err = dial_happy_eyeballs(&resolver, &relay_url(80), false)
+        let err = dial_happy_eyeballs(&resolver, &relay_url(80), false, None)
             .await
             .expect_err("no addresses to dial");
         assert!(matches!(err, DialError::Dns { .. }));
     }
 }
 
-/// Connects a TCP stream to `addr`, running the caller's [`ConfigureSocket`] hook on
+/// Connects a TCP stream to `addr`, running the caller's [`SocketConfigurator`] on
 /// the socket first.
 ///
 /// The relay connection has to be kept on the same egress path as the UDP transport:
@@ -482,7 +484,7 @@ mod tests {
 /// this connection into the tunnel it is carrying.
 async fn connect_tcp(
     addr: SocketAddr,
-    configure_socket: Option<&ConfigureSocket>,
+    configure_socket: Option<&Arc<dyn SocketConfigurator>>,
 ) -> std::io::Result<TcpStream> {
     let socket = match addr {
         SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
@@ -493,7 +495,7 @@ async fn connect_tcp(
             SocketAddr::V4(_) => socket2::Domain::IPV4,
             SocketAddr::V6(_) => socket2::Domain::IPV6,
         };
-        configure(socket2::SockRef::from(&socket), domain)?;
+        configure.configure(socket2::SockRef::from(&socket), domain)?;
     }
     socket.connect(addr).await
 }

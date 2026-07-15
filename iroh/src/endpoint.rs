@@ -24,7 +24,7 @@ use ipnet::{Ipv4Net, Ipv6Net};
 use iroh_base::{EndpointAddr, EndpointId, RelayUrl, SecretKey, TransportAddr};
 use iroh_relay::{RelayConfig, RelayMap, tls::CaTlsConfig};
 #[cfg(not(wasm_browser))]
-pub use netwatch::ConfigureSocket;
+pub use netwatch::SocketConfigurator;
 #[cfg(not(wasm_browser))]
 use n0_error::bail;
 use n0_error::{AnyError, e, ensure, stack_error};
@@ -158,7 +158,7 @@ pub struct Builder {
     configured_addrs: BTreeSet<SocketAddr>,
     direct_addr_filter: Option<Arc<dyn DirectAddrFilter>>,
     #[debug(skip)]
-    configure_socket: Option<ConfigureSocket>,
+    configure_socket: Option<Arc<dyn SocketConfigurator>>,
 }
 
 /// Filters the endpoint's direct (underlay) address candidates.
@@ -548,11 +548,12 @@ impl Builder {
         self
     }
 
-    /// Sets a hook to configure every socket the endpoint opens.
+    /// Sets a [`SocketConfigurator`], run on every socket the endpoint opens.
     ///
-    /// The hook runs on each underlay UDP socket and on each relay connection, before
-    /// the socket is bound or connected, and again whenever a socket is rebound (so a
-    /// hook that reads the current network state re-reads it on every network change).
+    /// It runs on each underlay UDP socket and on each relay connection, before the
+    /// socket is bound or connected, and again whenever a socket is rebound (so a
+    /// configurator that reads the current network state re-reads it on every network
+    /// change).
     ///
     /// Its purpose is to let the caller decide how iroh's own traffic is routed, which
     /// matters to a VPN that points the default route at its own tunnel device: without
@@ -561,10 +562,10 @@ impl Builder {
     /// Linux, `IP_BOUND_IF` / `IPV6_BOUND_IF` on Apple platforms), so iroh does not
     /// model them itself and hands out the socket instead.
     ///
-    /// An error from the hook fails the bind rather than leaving a socket configured in
-    /// a way the caller did not ask for.
-    pub fn configure_socket(mut self, configure: ConfigureSocket) -> Self {
-        self.configure_socket = Some(configure);
+    /// An error from the configurator fails the bind rather than leaving a socket
+    /// configured in a way the caller did not ask for.
+    pub fn configure_socket(mut self, configurator: impl SocketConfigurator) -> Self {
+        self.configure_socket = Some(Arc::new(configurator));
         self
     }
 
@@ -2157,7 +2158,7 @@ mod tests {
         let ep = Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Custom(relay_map.clone()))
             .ca_tls_config(CaTlsConfig::insecure_skip_verify())
-            .configure_socket(Arc::new(move |sock, domain| {
+            .configure_socket(move |sock: socket2::SockRef<'_>, domain: socket2::Domain| {
                 // Distinguish the UDP transport sockets from the relay's TCP dial by the
                 // socket's own type, not by guessing from call order.
                 match sock.r#type()? {
@@ -2167,7 +2168,7 @@ mod tests {
                 };
                 d.lock().expect("poisoned").push(domain);
                 Ok(())
-            }))
+            })
             .bind()
             .await?;
 

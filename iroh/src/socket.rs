@@ -36,7 +36,7 @@ use n0_future::{
 };
 use n0_watcher::{self, Watchable, Watcher};
 #[cfg(not(wasm_browser))]
-use netwatch::ConfigureSocket;
+use netwatch::SocketConfigurator;
 use netwatch::netmon;
 #[cfg(not(wasm_browser))]
 use netwatch::{
@@ -209,7 +209,7 @@ pub(crate) struct Options {
     /// it off a full-tunnel default route. See [`crate::endpoint::Builder::configure_socket`].
     #[cfg(not(wasm_browser))]
     #[debug(skip)]
-    pub(crate) configure_socket: Option<ConfigureSocket>,
+    pub(crate) configure_socket: Option<Arc<dyn SocketConfigurator>>,
 }
 
 /// Inner state for an iroh [`crate::Endpoint`].
