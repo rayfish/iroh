@@ -19,6 +19,8 @@ use n0_future::{
     time::{self},
 };
 use rustls::client::Resumption;
+
+use super::ConfigureSocket;
 use tokio::net::TcpStream;
 use tracing::{Instrument, error, info_span};
 
@@ -28,13 +30,15 @@ use super::{
 };
 use crate::defaults::timeouts::*;
 
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug, Clone)]
 pub(super) struct MaybeTlsStreamBuilder {
     url: Url,
     dns_resolver: DnsResolver,
     proxy_url: Option<Url>,
     prefer_ipv6: bool,
     tls_config: rustls::ClientConfig,
+    #[debug(skip)]
+    configure_socket: Option<ConfigureSocket>,
 }
 
 impl MaybeTlsStreamBuilder {
@@ -49,7 +53,13 @@ impl MaybeTlsStreamBuilder {
             proxy_url: None,
             prefer_ipv6: false,
             tls_config,
+            configure_socket: None,
         }
+    }
+
+    pub(super) fn configure_socket(mut self, configure: Option<ConfigureSocket>) -> Self {
+        self.configure_socket = configure;
+        self
     }
 
     pub(super) fn proxy_url(mut self, proxy_url: Option<Url>) -> Self {
@@ -118,8 +128,13 @@ impl MaybeTlsStreamBuilder {
             let stream = self.dial_url_proxy(proxy.clone(), tls_connector).await?;
             Ok(ProxyStream::Proxied(stream))
         } else {
-            let stream =
-                dial_happy_eyeballs(&self.dns_resolver, &self.url, self.prefer_ipv6).await?;
+            let stream = dial_happy_eyeballs(
+                &self.dns_resolver,
+                &self.url,
+                self.prefer_ipv6,
+                self.configure_socket.as_ref(),
+            )
+            .await?;
             Ok(ProxyStream::Raw(stream))
         }
     }
@@ -132,7 +147,12 @@ impl MaybeTlsStreamBuilder {
     {
         debug!(%self.url, %proxy_url, "dial url via proxy");
 
-        let tcp_stream = dial_happy_eyeballs(&self.dns_resolver, &proxy_url, self.prefer_ipv6)
+        let tcp_stream = dial_happy_eyeballs(
+            &self.dns_resolver,
+            &proxy_url,
+            self.prefer_ipv6,
+            self.configure_socket.as_ref(),
+        )
             .await
             .map_err(|err| match err {
                 DialError::InvalidTargetPort { meta } => DialError::ProxyInvalidTargetPort { meta },
@@ -247,6 +267,7 @@ async fn dial_happy_eyeballs(
     dns_resolver: &DnsResolver,
     url: &Url,
     prefer_ipv6: bool,
+    configure_socket: Option<&ConfigureSocket>,
 ) -> Result<TcpStream, DialError> {
     let port = url_port(url).ok_or_else(|| e!(DialError::InvalidTargetPort))?;
 
@@ -281,14 +302,18 @@ async fn dial_happy_eyeballs(
             && let Some(ip) = pop_family(&mut queue, &mut next_prefer_v6)
         {
             let addr = SocketAddr::new(ip, port);
+            let configure_socket = configure_socket.cloned();
             dials.push(
                 async move {
                     trace!("connecting TCP stream");
-                    let stream = time::timeout(DIAL_ENDPOINT_TIMEOUT, TcpStream::connect(addr))
-                        .await
-                        .map_err(DialError::from)
-                        .and_then(|res| res.map_err(DialError::from))
-                        .inspect_err(|err| debug!("failed to connect: {err:#}"))?;
+                    let stream = time::timeout(
+                        DIAL_ENDPOINT_TIMEOUT,
+                        connect_tcp(addr, configure_socket.as_ref()),
+                    )
+                    .await
+                    .map_err(DialError::from)
+                    .and_then(|res| res.map_err(DialError::from))
+                    .inspect_err(|err| debug!("failed to connect: {err:#}"))?;
                     trace!("TCP stream connected");
                     stream.set_nodelay(true)?;
                     Ok(stream)
@@ -447,4 +472,28 @@ mod tests {
             .expect_err("no addresses to dial");
         assert!(matches!(err, DialError::Dns { .. }));
     }
+}
+
+/// Connects a TCP stream to `addr`, running the caller's [`ConfigureSocket`] hook on
+/// the socket first.
+///
+/// The relay connection has to be kept on the same egress path as the UDP transport:
+/// a VPN that points the default route at its own tunnel device would otherwise route
+/// this connection into the tunnel it is carrying.
+async fn connect_tcp(
+    addr: SocketAddr,
+    configure_socket: Option<&ConfigureSocket>,
+) -> std::io::Result<TcpStream> {
+    let socket = match addr {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+    };
+    if let Some(configure) = configure_socket {
+        let domain = match addr {
+            SocketAddr::V4(_) => socket2::Domain::IPV4,
+            SocketAddr::V6(_) => socket2::Domain::IPV6,
+        };
+        configure(socket2::SockRef::from(&socket), domain)?;
+    }
+    socket.connect(addr).await
 }

@@ -2324,6 +2324,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "socket2",
  "strum",
  "testdir",
  "time",
@@ -2539,6 +2540,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "simdutf8",
+ "socket2",
  "strum",
  "test-strategy",
  "time",
@@ -3076,8 +3078,7 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d9cbe01741347ef750d743d6690603f5eed8341e679fb51c8e629337aa11976"
+source = "git+https://github.com/rayfish/net-tools?branch=feat%2Fconfigure-socket#47918d01dd4e08e29fcfb51e7c1295543f0cefaf"
 dependencies = [
  "atomic-waker",
  "bytes",

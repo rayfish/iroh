@@ -9,12 +9,19 @@ use std::{
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use n0_watcher::Watchable;
-use netwatch::{UdpSender, UdpSocket};
+use netwatch::{BindOptions, ConfigureSocket, UdpSender, UdpSocket};
 use pin_project::pin_project;
 use tracing::{debug, info, trace};
 
 use super::{RecvInfo, Transmit};
 use crate::metrics::{EndpointMetrics, SocketMetrics};
+
+fn bind_opts(configure_socket: Option<ConfigureSocket>) -> BindOptions {
+    match configure_socket {
+        Some(configure) => BindOptions::new().configure_socket(configure),
+        None => BindOptions::new(),
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct IpTransport {
@@ -164,12 +171,12 @@ impl IpTransport {
     pub(crate) fn bind(
         config: Config,
         metrics: Arc<SocketMetrics>,
-        socket_mark: Option<u32>,
+        configure_socket: Option<ConfigureSocket>,
     ) -> io::Result<Self> {
         let addr: SocketAddr = config.into();
         debug!(?addr, "binding");
         let socket =
-            netwatch::UdpSocket::bind_full_with_mark(addr, socket_mark).inspect_err(|err| {
+            netwatch::UdpSocket::bind_with(addr, bind_opts(configure_socket)).inspect_err(|err| {
                 debug!(%addr, "failed to bind: {err:#}");
             })?;
         let local_addr = socket.local_addr()?;
@@ -414,7 +421,7 @@ impl IpTransports {
     pub(super) fn bind(
         configs: impl Iterator<Item = Config>,
         metrics: &EndpointMetrics,
-        socket_mark: Option<u32>,
+        configure_socket: Option<ConfigureSocket>,
     ) -> io::Result<Self> {
         let mut has_v4_default = false;
         let mut ip_v4 = Vec::new();
@@ -423,7 +430,7 @@ impl IpTransports {
         let mut ip_v6 = Vec::new();
 
         for config in configs {
-            match IpTransport::bind(config, metrics.socket.clone(), socket_mark) {
+            match IpTransport::bind(config, metrics.socket.clone(), configure_socket.clone()) {
                 Ok(transport) => {
                     if config.is_ipv4() {
                         if config.is_default() {
@@ -528,7 +535,7 @@ mod tests {
             },
         ];
 
-        let transports = IpTransports::bind(config.into_iter(), &metrics)?;
+        let transports = IpTransports::bind(config.into_iter(), &metrics, None)?;
         assert_eq!(transports.v4[0].config.prefix_len(), 24);
         assert_eq!(transports.v4[1].config.prefix_len(), 8);
         assert_eq!(transports.v4[2].config.prefix_len(), 0);

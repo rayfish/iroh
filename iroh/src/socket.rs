@@ -35,6 +35,8 @@ use n0_future::{
     time::{self, Duration, Instant},
 };
 use n0_watcher::{self, Watchable, Watcher};
+#[cfg(not(wasm_browser))]
+use netwatch::ConfigureSocket;
 use netwatch::netmon;
 #[cfg(not(wasm_browser))]
 use netwatch::{
@@ -200,11 +202,14 @@ pub(crate) struct Options {
     /// Optional filter dropping gathered local interface addresses (e.g. VPN overlay IPs).
     pub(crate) direct_addr_filter: Option<Arc<dyn crate::endpoint::DirectAddrFilter>>,
 
-    /// Optional fwmark applied to the underlay UDP sockets (Linux `SO_MARK`).
+    /// Optional hook run on every socket the endpoint opens, before bind/connect
+    /// and again on rebind.
     ///
-    /// Lets the caller policy-route iroh's own traffic, for example around a
-    /// full-tunnel default route. `None` leaves the sockets unmarked.
-    pub(crate) socket_mark: Option<u32>,
+    /// Lets the caller decide how iroh's own traffic is routed, for example to keep
+    /// it off a full-tunnel default route. See [`crate::endpoint::Builder::configure_socket`].
+    #[cfg(not(wasm_browser))]
+    #[debug(skip)]
+    pub(crate) configure_socket: Option<ConfigureSocket>,
 }
 
 /// Inner state for an iroh [`crate::Endpoint`].
@@ -905,7 +910,8 @@ impl EndpointInner {
             static_config,
             configured_addrs,
             direct_addr_filter,
-            socket_mark,
+            #[cfg(not(wasm_browser))]
+            configure_socket,
         } = opts;
 
         let address_lookup = address_lookup::AddressLookupServices::default();
@@ -945,6 +951,8 @@ impl EndpointInner {
             tls_config: tls_config.clone(),
             metrics: metrics.socket.clone(),
             relay_map: relay_map.clone(),
+            #[cfg(not(wasm_browser))]
+            configure_socket: configure_socket.clone(),
         };
 
         let shutdown_state = ShutdownState::default();
@@ -955,7 +963,8 @@ impl EndpointInner {
             relay_actor_config,
             &metrics,
             shutdown_token.child_token(),
-            socket_mark,
+            #[cfg(not(wasm_browser))]
+            configure_socket,
         )
         .map_err(|err| e!(BindError::Sockets, err))?;
 
@@ -2209,7 +2218,8 @@ mod tests {
             static_config,
             configured_addrs: Default::default(),
             direct_addr_filter: None,
-            socket_mark: None,
+            #[cfg(not(wasm_browser))]
+            configure_socket: None,
         }
     }
 
@@ -2692,7 +2702,8 @@ mod tests {
             static_config,
             configured_addrs: Default::default(),
             direct_addr_filter: None,
-            socket_mark: None,
+            #[cfg(not(wasm_browser))]
+            configure_socket: None,
         };
         let sock = EndpointInner::bind(opts).await?;
         Ok(sock)

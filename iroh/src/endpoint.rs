@@ -24,6 +24,8 @@ use ipnet::{Ipv4Net, Ipv6Net};
 use iroh_base::{EndpointAddr, EndpointId, RelayUrl, SecretKey, TransportAddr};
 use iroh_relay::{RelayConfig, RelayMap, tls::CaTlsConfig};
 #[cfg(not(wasm_browser))]
+pub use netwatch::ConfigureSocket;
+#[cfg(not(wasm_browser))]
 use n0_error::bail;
 use n0_error::{AnyError, e, ensure, stack_error};
 use n0_watcher::Watcher;
@@ -131,7 +133,7 @@ pub use crate::{net_report::NetReportConfig, portmapper::PortmapperConfig};
 /// new [`EndpointId`].
 ///
 /// To create the [`Endpoint`] call [`Builder::bind`].
-#[derive(Debug)]
+#[derive(derive_more::Debug)]
 pub struct Builder {
     secret_key: Option<SecretKey>,
     alpn_protocols: Vec<Vec<u8>>,
@@ -155,7 +157,8 @@ pub struct Builder {
     crypto_provider: Option<Arc<rustls::crypto::CryptoProvider>>,
     configured_addrs: BTreeSet<SocketAddr>,
     direct_addr_filter: Option<Arc<dyn DirectAddrFilter>>,
-    socket_mark: Option<u32>,
+    #[debug(skip)]
+    configure_socket: Option<ConfigureSocket>,
 }
 
 /// Filters the endpoint's direct (underlay) address candidates.
@@ -245,7 +248,7 @@ impl Builder {
             crypto_provider: None,
             configured_addrs: Default::default(),
             direct_addr_filter: None,
-            socket_mark: None,
+            configure_socket: None,
         }
     }
 
@@ -310,7 +313,7 @@ impl Builder {
             static_config,
             configured_addrs: self.configured_addrs,
             direct_addr_filter: self.direct_addr_filter,
-            socket_mark: self.socket_mark,
+            configure_socket: self.configure_socket,
         };
 
         let inner = socket::EndpointInner::bind(sock_opts)
@@ -545,15 +548,23 @@ impl Builder {
         self
     }
 
-    /// Sets an fwmark on the underlay UDP sockets (Linux `SO_MARK`).
+    /// Sets a hook to configure every socket the endpoint opens.
     ///
-    /// The mark is applied to every IP transport socket the endpoint binds, and
-    /// reapplied on rebind. It lets you policy-route iroh's own traffic with an
-    /// `ip rule`, for example to keep it off a full-tunnel default route so the
-    /// tunnel does not swallow the packets carrying it. No-op on non-Linux
-    /// platforms.
-    pub fn socket_mark(mut self, mark: u32) -> Self {
-        self.socket_mark = Some(mark);
+    /// The hook runs on each underlay UDP socket and on each relay connection, before
+    /// the socket is bound or connected, and again whenever a socket is rebound (so a
+    /// hook that reads the current network state re-reads it on every network change).
+    ///
+    /// Its purpose is to let the caller decide how iroh's own traffic is routed, which
+    /// matters to a VPN that points the default route at its own tunnel device: without
+    /// a way to keep iroh's underlay off that route, the transport is routed into the
+    /// tunnel it is carrying. The options for that are platform-specific (`SO_MARK` on
+    /// Linux, `IP_BOUND_IF` / `IPV6_BOUND_IF` on Apple platforms), so iroh does not
+    /// model them itself and hands out the socket instead.
+    ///
+    /// An error from the hook fails the bind rather than leaving a socket configured in
+    /// a way the caller did not ask for.
+    pub fn configure_socket(mut self, configure: ConfigureSocket) -> Self {
+        self.configure_socket = Some(configure);
         self
     }
 
@@ -2121,6 +2132,67 @@ mod tests {
         let err = res.err().unwrap();
         assert!(err.to_string().starts_with("Connecting to ourself"));
 
+        Ok(())
+    }
+
+    /// The `configure_socket` hook must reach *every* socket the endpoint opens: the
+    /// UDP transport sockets and the relay connection. A VPN uses it to keep iroh's
+    /// underlay off its own tunnel route, and a relay connection that missed the hook
+    /// would be routed into the tunnel it is carrying.
+    #[tokio::test]
+    #[traced_test]
+    async fn configure_socket_hook_reaches_udp_and_relay_sockets() -> Result {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let (relay_map, _relay_url, _guard) = run_relay_server().await?;
+
+        let udp_calls = Arc::new(AtomicUsize::new(0));
+        let tcp_calls = Arc::new(AtomicUsize::new(0));
+        let domains = Arc::new(Mutex::new(Vec::new()));
+        let (u, t, d) = (udp_calls.clone(), tcp_calls.clone(), domains.clone());
+
+        let ep = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
+            .ca_tls_config(CaTlsConfig::insecure_skip_verify())
+            .configure_socket(Arc::new(move |sock, domain| {
+                // Distinguish the UDP transport sockets from the relay's TCP dial by the
+                // socket's own type, not by guessing from call order.
+                match sock.r#type()? {
+                    socket2::Type::DGRAM => u.fetch_add(1, Ordering::SeqCst),
+                    socket2::Type::STREAM => t.fetch_add(1, Ordering::SeqCst),
+                    other => panic!("unexpected socket type {other:?}"),
+                };
+                d.lock().expect("poisoned").push(domain);
+                Ok(())
+            }))
+            .bind()
+            .await?;
+
+        // `online()` resolves once the endpoint has a home relay, which means the relay
+        // connection has been dialed.
+        ep.online().await;
+
+        assert!(
+            udp_calls.load(Ordering::SeqCst) > 0,
+            "hook never ran on a UDP transport socket"
+        );
+        assert!(
+            tcp_calls.load(Ordering::SeqCst) > 0,
+            "hook never ran on the relay's TCP socket: it would be routed into the tunnel"
+        );
+        assert!(
+            domains
+                .lock()
+                .expect("poisoned")
+                .iter()
+                .all(|d| *d == socket2::Domain::IPV4 || *d == socket2::Domain::IPV6),
+            "hook was handed a domain it cannot act on"
+        );
+
+        ep.close().await;
         Ok(())
     }
 

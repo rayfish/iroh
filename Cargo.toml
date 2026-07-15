@@ -41,3 +41,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(iroh_docsrs)", "cfg(iroh_l
 
 [workspace.lints.clippy]
 unused-async = "warn"
+
+# netwatch's ConfigureSocket hook (upstream PR n0-computer/net-tools#180); drop
+# this patch once a netwatch release carries it.
+[patch.crates-io]
+netwatch = { git = "https://github.com/rayfish/net-tools", branch = "feat/configure-socket" }

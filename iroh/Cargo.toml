@@ -74,6 +74,7 @@ axum = { version = "0.8", optional = true }
 # non-wasm-in-browser dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 
+socket2 = { version = "0.6", features = ["all"] }
 hickory-resolver = { version = "0.26.0", default-features = false }
 portmapper = { version = "0.19.1", optional = true, default-features = false }
 noq = { version = "1.0.1", default-features = false, features = ["runtime-tokio", "rustls"] }
