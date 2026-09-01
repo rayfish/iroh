@@ -117,10 +117,9 @@ pub use self::{
         QuicTransportConfig, QuicTransportConfigBuilder, ReadDatagram, ReadError, ReadExactError,
         ReadManyDatagrams, ReadToEndError, RecvStream, ResetError, RttEstimator, SendDatagram,
         SendDatagramError, SendStream, ServerConfig, ServerConfigBuilder, Side, StoppedError,
-        StreamId, TimeSource,
-        TokenLog, TokenReuseError, TransportError, TransportErrorCode, TransportParameters,
-        UdpStats, UnorderedRecvStream, UnsupportedVersion, ValidationTokenConfig, VarInt,
-        VarIntBoundsExceeded, WriteError,
+        StreamId, TimeSource, TokenLog, TokenReuseError, TransportError, TransportErrorCode,
+        TransportParameters, UdpStats, UnorderedRecvStream, UnsupportedVersion,
+        ValidationTokenConfig, VarInt, VarIntBoundsExceeded, WriteError,
     },
 };
 #[cfg(not(wasm_browser))]

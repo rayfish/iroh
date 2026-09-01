@@ -917,7 +917,10 @@ impl<T: ConnectionState> Connection<T> {
     /// `read_datagram()` in a loop when forwarding bursts: a whole batch is taken under a
     /// single lock hold.
     #[inline]
-    pub fn read_many_datagrams<'a>(&'a self, out: &'a mut [Bytes]) -> ReadManyDatagrams<'a> {
+    pub fn read_many_datagrams<'a, 'b>(
+        &'a self,
+        out: &'b mut [Bytes],
+    ) -> ReadManyDatagrams<'a, 'b> {
         self.inner.read_many_datagrams(out)
     }
 
