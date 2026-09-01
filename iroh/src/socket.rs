@@ -26,6 +26,8 @@ use std::{
 };
 
 use iroh_base::{EndpointAddr, EndpointId, RelayUrl, SecretKey, TransportAddr};
+#[cfg(not(wasm_browser))]
+use iroh_relay::client::SocketConfigurator;
 use iroh_relay::{RelayConfig, RelayMap};
 use mapped_addrs::MultipathMappedAddr;
 use n0_error::{AnyError, anyerr, bail, e, stack_error};
@@ -35,8 +37,6 @@ use n0_future::{
     time::{self, Duration, Instant},
 };
 use n0_watcher::{self, Watchable, Watcher};
-#[cfg(not(wasm_browser))]
-use netwatch::SocketConfigurator;
 use netwatch::netmon;
 #[cfg(not(wasm_browser))]
 use netwatch::{
@@ -2596,7 +2596,9 @@ mod tests {
     async fn direct_addr_filter_drops_local_addresses() {
         // Baseline: without a filter, local interface addresses are gathered.
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
-        let sock = EndpointInner::bind(default_options(&mut rng)).await.unwrap();
+        let sock = EndpointInner::bind(default_options(&mut rng))
+            .await
+            .unwrap();
         assert!(
             !sock.ip_addrs().get().is_empty(),
             "expected some local addresses without a filter"

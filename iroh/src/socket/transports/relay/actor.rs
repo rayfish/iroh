@@ -39,6 +39,8 @@ use std::{
 
 use backon::{Backoff, BackoffBuilder, ExponentialBuilder};
 use iroh_base::{EndpointId, RelayUrl, SecretKey};
+#[cfg(not(wasm_browser))]
+use iroh_relay::client::SocketConfigurator;
 use iroh_relay::{
     self as relay, PingTracker, RelayMap,
     client::{Client, ConnectError, RecvError, SendError},
@@ -50,10 +52,10 @@ use n0_future::{
     task::{JoinError, JoinSet},
     time::{self, Duration, Instant, MissedTickBehavior},
 };
-#[cfg(not(wasm_browser))]
-use netwatch::SocketConfigurator;
 use n0_watcher::Watchable;
 use netwatch::interfaces;
+#[cfg(not(wasm_browser))]
+use socket2::SockRef;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, event, info, info_span, instrument, trace, warn};
@@ -323,22 +325,12 @@ impl ActiveRelayActor {
         }
 
         // Keep the relay connection on the same egress path as the UDP transport: it is
-        // just as fatal to route it into a tunnel it is carrying. The newtype bridges
-        // netwatch's SocketConfigurator to iroh-relay's own copy of the trait
-        // (iroh-relay cannot depend on netwatch: it also builds for the browser).
+        // just as fatal to route it into a tunnel it is carrying.
         #[cfg(not(wasm_browser))]
         if let Some(configure) = configure_socket {
-            struct Bridge(Arc<dyn SocketConfigurator>);
-            impl relay::client::SocketConfigurator for Bridge {
-                fn configure(
-                    &self,
-                    socket: socket2::SockRef<'_>,
-                    domain: socket2::Domain,
-                ) -> std::io::Result<()> {
-                    self.0.configure(socket, domain)
-                }
-            }
-            builder = builder.configure_socket(Bridge(configure));
+            builder = builder.configure_socket(move |socket: SockRef<'_>, domain| {
+                configure.configure(socket, domain)
+            });
         }
         builder
     }
@@ -1516,6 +1508,8 @@ mod tests {
         let (relay_datagram_recv_queue, _recv_rx) = mpsc::channel(1);
         let config = Config {
             my_relay: Default::default(),
+            #[cfg(not(wasm_browser))]
+            configure_socket: None,
             secret_key: SecretKey::from_bytes(&[0u8; 32]),
             dns_resolver: DnsResolver::new(),
             proxy_url: None,
@@ -1934,6 +1928,8 @@ mod tests {
                     .client_config(default_provider())
                     .expect("infallible"),
                 auth_token: None,
+                #[cfg(not(wasm_browser))]
+                configure_socket: None,
             },
             stop_token: CancellationToken::new(),
             metrics: Default::default(),

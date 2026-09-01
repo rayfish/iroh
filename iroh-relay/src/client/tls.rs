@@ -6,7 +6,7 @@
 
 // Based on tailscale/derp/derphttp/derphttp_client.go
 
-use std::{collections::VecDeque, net::IpAddr};
+use std::{collections::VecDeque, net::IpAddr, sync::Arc};
 
 use bytes::Bytes;
 use data_encoding::BASE64URL;
@@ -19,14 +19,11 @@ use n0_future::{
     time::{self},
 };
 use rustls::client::Resumption;
-
-use std::sync::Arc;
-
-use super::SocketConfigurator;
 use tokio::net::TcpStream;
 use tracing::{Instrument, error, info_span};
 
 use super::{
+    SocketConfigurator,
     streams::{MaybeTlsStream, ProxyStream},
     *,
 };
@@ -59,7 +56,10 @@ impl MaybeTlsStreamBuilder {
         }
     }
 
-    pub(super) fn configure_socket(mut self, configure: Option<Arc<dyn SocketConfigurator>>) -> Self {
+    pub(super) fn configure_socket(
+        mut self,
+        configure: Option<Arc<dyn SocketConfigurator>>,
+    ) -> Self {
         self.configure_socket = configure;
         self
     }
@@ -155,11 +155,11 @@ impl MaybeTlsStreamBuilder {
             self.prefer_ipv6,
             self.configure_socket.as_ref(),
         )
-            .await
-            .map_err(|err| match err {
-                DialError::InvalidTargetPort { meta } => DialError::ProxyInvalidTargetPort { meta },
-                err => err,
-            })?;
+        .await
+        .map_err(|err| match err {
+            DialError::InvalidTargetPort { meta } => DialError::ProxyInvalidTargetPort { meta },
+            err => err,
+        })?;
 
         // Setup TLS if necessary
         let io = if proxy_url.scheme() == "http" {
@@ -401,6 +401,30 @@ fn url_port(url: &Url) -> Option<u16> {
     }
 }
 
+/// Connects a TCP stream to `addr`, running the caller's [`SocketConfigurator`] on
+/// the socket first.
+///
+/// The relay connection has to be kept on the same egress path as the UDP transport:
+/// a VPN that points the default route at its own tunnel device would otherwise route
+/// this connection into the tunnel it is carrying.
+async fn connect_tcp(
+    addr: SocketAddr,
+    configure_socket: Option<&Arc<dyn SocketConfigurator>>,
+) -> std::io::Result<TcpStream> {
+    let socket = match addr {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+    };
+    if let Some(configure) = configure_socket {
+        let domain = match addr {
+            SocketAddr::V4(_) => socket2::Domain::IPV4,
+            SocketAddr::V6(_) => socket2::Domain::IPV6,
+        };
+        configure.configure(socket2::SockRef::from(&socket), domain)?;
+    }
+    socket.connect(addr).await
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -474,28 +498,4 @@ mod tests {
             .expect_err("no addresses to dial");
         assert!(matches!(err, DialError::Dns { .. }));
     }
-}
-
-/// Connects a TCP stream to `addr`, running the caller's [`SocketConfigurator`] on
-/// the socket first.
-///
-/// The relay connection has to be kept on the same egress path as the UDP transport:
-/// a VPN that points the default route at its own tunnel device would otherwise route
-/// this connection into the tunnel it is carrying.
-async fn connect_tcp(
-    addr: SocketAddr,
-    configure_socket: Option<&Arc<dyn SocketConfigurator>>,
-) -> std::io::Result<TcpStream> {
-    let socket = match addr {
-        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
-        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
-    };
-    if let Some(configure) = configure_socket {
-        let domain = match addr {
-            SocketAddr::V4(_) => socket2::Domain::IPV4,
-            SocketAddr::V6(_) => socket2::Domain::IPV6,
-        };
-        configure.configure(socket2::SockRef::from(&socket), domain)?;
-    }
-    socket.connect(addr).await
 }

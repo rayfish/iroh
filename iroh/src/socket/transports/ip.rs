@@ -8,9 +8,11 @@ use std::{
 };
 
 use ipnet::{Ipv4Net, Ipv6Net};
+use iroh_relay::client::SocketConfigurator;
 use n0_watcher::Watchable;
-use netwatch::{BindOptions, SocketConfigurator, UdpSender, UdpSocket};
+use netwatch::{BindOptions, UdpSender, UdpSocket};
 use pin_project::pin_project;
+use socket2::{Domain, SockRef};
 use tracing::{debug, info, trace};
 
 use super::{RecvInfo, Transmit};
@@ -18,7 +20,12 @@ use crate::metrics::{EndpointMetrics, SocketMetrics};
 
 fn bind_opts(configure_socket: Option<Arc<dyn SocketConfigurator>>) -> BindOptions {
     match configure_socket {
-        Some(configure) => BindOptions::new().configure_socket(configure),
+        // netwatch's hook is a closure over its own socket handle, so it takes the
+        // trait object rather than being one: `SockRef` borrows the socket netwatch
+        // hands out, which implements `AsFd`/`AsSocket` for exactly this.
+        Some(configure) => BindOptions::new().configure_socket(move |socket, family| {
+            configure.configure(SockRef::from(&socket), Domain::from(family))
+        }),
         None => BindOptions::new(),
     }
 }
@@ -182,8 +189,8 @@ impl IpTransport {
     ) -> io::Result<Self> {
         let addr: SocketAddr = config.into();
         debug!(?addr, "binding");
-        let socket =
-            netwatch::UdpSocket::bind_with(addr, bind_opts(configure_socket)).inspect_err(|err| {
+        let socket = netwatch::UdpSocket::bind_with(addr, bind_opts(configure_socket))
+            .inspect_err(|err| {
                 debug!(%addr, "failed to bind: {err:#}");
             })?;
         let local_addr = socket.local_addr()?;

@@ -12,7 +12,7 @@ use bytes::Bytes;
 use iroh_base::{CustomAddr, EndpointId, RelayUrl, TransportAddr};
 use iroh_relay::RelayMap;
 #[cfg(not(wasm_browser))]
-use netwatch::SocketConfigurator;
+use iroh_relay::client::SocketConfigurator;
 use n0_watcher::Watcher;
 use relay::{RelayNetworkChangeSender, RelaySender};
 use tokio_util::sync::CancellationToken;

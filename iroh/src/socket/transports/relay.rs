@@ -402,6 +402,8 @@ mod tests {
     fn test_relay_transport() -> RelayTransport {
         let config = RelayActorConfig {
             my_relay: HomeRelayWatch::default(),
+            #[cfg(not(wasm_browser))]
+            configure_socket: None,
             secret_key: SecretKey::from_bytes(&[7u8; 32]),
             dns_resolver: DnsResolver::new(),
             proxy_url: None,

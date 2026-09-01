@@ -22,9 +22,9 @@ use ipnet::IpNet;
 #[cfg(not(wasm_browser))]
 use ipnet::{Ipv4Net, Ipv6Net};
 use iroh_base::{EndpointAddr, EndpointId, RelayUrl, SecretKey, TransportAddr};
-use iroh_relay::{RelayConfig, RelayMap, tls::CaTlsConfig};
 #[cfg(not(wasm_browser))]
-pub use netwatch::SocketConfigurator;
+pub use iroh_relay::client::SocketConfigurator;
+use iroh_relay::{RelayConfig, RelayMap, tls::CaTlsConfig};
 #[cfg(not(wasm_browser))]
 use n0_error::bail;
 use n0_error::{AnyError, e, ensure, stack_error};
