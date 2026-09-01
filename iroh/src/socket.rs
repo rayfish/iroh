@@ -1076,6 +1076,7 @@ impl EndpointInner {
             });
             net_report::Options::new(tls_config.clone())
                 .quic_config(qad_config)
+                .proxy_url(proxy_url.clone())
                 .net_report_config(net_report_config)
         };
 
