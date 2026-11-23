@@ -195,9 +195,6 @@ pub(crate) struct Options {
     /// Explicitly configured external addresses to advertise.
     pub(crate) configured_addrs: BTreeSet<SocketAddr>,
 
-    /// Optional filter dropping gathered local interface addresses (e.g. VPN overlay IPs).
-    pub(crate) direct_addr_filter: Option<Arc<dyn crate::endpoint::DirectAddrFilter>>,
-
     /// Optional hook run on every socket the endpoint opens, before bind/connect
     /// and again on rebind.
     ///
@@ -385,8 +382,6 @@ pub(crate) struct Socket {
     address_lookup_user_data: RwLock<Option<UserData>>,
     /// Explicitly configured external addresses to advertise.
     configured_addrs: RwLock<BTreeSet<SocketAddr>>,
-    /// Optional filter dropping gathered local interface addresses (e.g. VPN overlay IPs).
-    direct_addr_filter: Option<Arc<dyn crate::endpoint::DirectAddrFilter>>,
 
     pub(crate) tls_config: rustls::ClientConfig,
 
@@ -901,7 +896,6 @@ impl EndpointInner {
             net_report_config,
             static_config,
             configured_addrs,
-            direct_addr_filter,
             #[cfg(not(wasm_browser))]
             configure_socket,
             network_monitor,
@@ -1013,7 +1007,6 @@ impl EndpointInner {
             relay_map: relay_map.clone(),
             address_lookup_user_data: RwLock::new(address_lookup_user_data),
             configured_addrs: RwLock::new(configured_addrs),
-            direct_addr_filter,
             direct_addrs,
             net_report: Watchable::new((None, UpdateReason::None)),
             #[cfg(not(wasm_browser))]
@@ -1898,20 +1891,11 @@ impl Actor {
         }
 
         // Finally create and store store all these direct addresses
-        let direct_addr_filter = self.sock.direct_addr_filter.clone();
         let stored_addrs = addrs
             .into_iter()
             .filter_map(|(addr, (typ, is_deprecated))| {
                 // Filter out deprecated IPs
                 if is_deprecated {
-                    return None;
-                }
-                // Drop addresses rejected by the application filter (e.g. a VPN
-                // overlay IP bound on a TUN device), so they are never stored,
-                // published, or used as a holepunch / NAT-traversal candidate.
-                if let Some(f) = &direct_addr_filter
-                    && !f.keeps(addr.ip())
-                {
                     return None;
                 }
                 Some(DirectAddr { addr, typ })
@@ -2211,7 +2195,6 @@ mod tests {
             net_report_config: Default::default(),
             static_config,
             configured_addrs: Default::default(),
-            direct_addr_filter: None,
             #[cfg(not(wasm_browser))]
             configure_socket: None,
             network_monitor: None,
@@ -2585,73 +2568,6 @@ mod tests {
         assert_eq!(eps0, eps1);
     }
 
-    #[tokio::test]
-    #[traced_test]
-    async fn direct_addr_filter_drops_local_addresses() {
-        // Baseline: without a filter, local interface addresses are gathered.
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
-        let sock = EndpointInner::bind(default_options(&mut rng))
-            .await
-            .unwrap();
-        assert!(
-            !sock.ip_addrs().get().is_empty(),
-            "expected some local addresses without a filter"
-        );
-
-        // A reject-all filter drops every gathered local interface address, so
-        // `collect_local_addresses` contributes nothing.
-        #[derive(Debug)]
-        struct DropAll;
-        impl crate::endpoint::DirectAddrFilter for DropAll {
-            fn keeps(&self, _ip: std::net::IpAddr) -> bool {
-                false
-            }
-        }
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
-        let mut opts = default_options(&mut rng);
-        opts.direct_addr_filter = Some(Arc::new(DropAll));
-        let sock = EndpointInner::bind(opts).await.unwrap();
-        assert!(
-            sock.ip_addrs().get().is_empty(),
-            "a reject-all direct_addr_filter should drop every local address"
-        );
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn direct_addr_filter_keeps_unmatched_addresses() {
-        // A filter that rejects only a never-present address keeps everything the
-        // unfiltered bind gathered.
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
-        let baseline = EndpointInner::bind(default_options(&mut rng))
-            .await
-            .unwrap()
-            .ip_addrs()
-            .get();
-
-        #[derive(Debug)]
-        struct DropOne(std::net::IpAddr);
-        impl crate::endpoint::DirectAddrFilter for DropOne {
-            fn keeps(&self, ip: std::net::IpAddr) -> bool {
-                ip != self.0
-            }
-        }
-        // 192.0.2.1 is TEST-NET-1 (RFC 5737); it is never a real local address.
-        let never = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1));
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
-        let mut opts = default_options(&mut rng);
-        opts.direct_addr_filter = Some(Arc::new(DropOne(never)));
-        let sock = EndpointInner::bind(opts).await.unwrap();
-        // Compare by IP: each bind gets a fresh ephemeral port, so the full
-        // SocketAddrs differ even though the same interface addresses are kept.
-        let ips = |set: &std::collections::BTreeSet<super::DirectAddr>| {
-            set.iter()
-                .map(|d| d.addr.ip())
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        assert_eq!(ips(&sock.ip_addrs().get()), ips(&baseline));
-    }
-
     /// Creates a new [`noq::Endpoint`] hooked up to a [`Socket`].
     ///
     /// This is without involving [`crate::endpoint::Endpoint`].  The socket will accept
@@ -2698,7 +2614,6 @@ mod tests {
             net_report_config: Default::default(),
             static_config,
             configured_addrs: Default::default(),
-            direct_addr_filter: None,
             #[cfg(not(wasm_browser))]
             configure_socket: None,
             network_monitor: None,

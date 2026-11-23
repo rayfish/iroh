@@ -11,14 +11,8 @@
 //!
 //! [module docs]: crate
 
-use std::{
-    collections::BTreeSet,
-    net::{IpAddr, SocketAddr},
-    pin::Pin,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, net::SocketAddr, pin::Pin, sync::Arc};
 
-use ipnet::IpNet;
 #[cfg(not(wasm_browser))]
 use ipnet::{Ipv4Net, Ipv6Net};
 use iroh_base::{EndpointAddr, EndpointId, RelayUrl, SecretKey, TransportAddr};
@@ -163,30 +157,9 @@ pub struct Builder {
     net_report_config: NetReportConfig,
     crypto_provider: Option<Arc<rustls::crypto::CryptoProvider>>,
     configured_addrs: BTreeSet<SocketAddr>,
-    direct_addr_filter: Option<Arc<dyn DirectAddrFilter>>,
     #[debug(skip)]
     configure_socket: Option<Arc<dyn SocketConfigurator>>,
     network_monitor: Option<Arc<dyn NetworkMonitor>>,
-}
-
-/// Filters the endpoint's direct (underlay) address candidates.
-///
-/// An address for which [`Self::keeps`] returns `false` is dropped: it is not
-/// stored, published, or used as a holepunch candidate. Set it with
-/// [`Builder::direct_addr_filter`].
-pub trait DirectAddrFilter: Send + Sync + std::fmt::Debug + 'static {
-    /// Returns `true` to keep `ip` as a candidate, `false` to drop it.
-    fn keeps(&self, ip: IpAddr) -> bool;
-}
-
-/// A list of networks acts as an exclude filter: an address contained in any of
-/// them is dropped, everything else is kept. This lets whole CIDR ranges be
-/// excluded (e.g. a VPN overlay bound on a TUN device) without implementing
-/// [`DirectAddrFilter`]. An empty list keeps every address.
-impl DirectAddrFilter for Vec<IpNet> {
-    fn keeps(&self, ip: IpAddr) -> bool {
-        !self.iter().any(|net| net.contains(&ip))
-    }
 }
 
 impl From<RelayMode> for Option<TransportConfig> {
@@ -255,7 +228,6 @@ impl Builder {
             net_report_config: Default::default(),
             crypto_provider: None,
             configured_addrs: Default::default(),
-            direct_addr_filter: None,
             configure_socket: None,
             network_monitor: None,
         }
@@ -326,7 +298,6 @@ impl Builder {
             net_report_config: self.net_report_config,
             static_config,
             configured_addrs: self.configured_addrs,
-            direct_addr_filter: self.direct_addr_filter,
             configure_socket: self.configure_socket,
             network_monitor: self.network_monitor,
         };
@@ -701,24 +672,6 @@ impl Builder {
     pub fn clear_addr_filter(mut self) -> Self {
         self.addr_filter = None;
         self
-    }
-
-    /// Sets a [`DirectAddrFilter`] that drops selected addresses from the
-    /// endpoint's direct address candidates.
-    pub fn direct_addr_filter(mut self, filter: impl DirectAddrFilter) -> Self {
-        self.direct_addr_filter = Some(Arc::new(filter));
-        self
-    }
-
-    /// Excludes addresses in the given networks from the endpoint's direct
-    /// address candidates.
-    ///
-    /// Convenience over [`Self::direct_addr_filter`] for the common case of
-    /// dropping whole CIDR ranges (e.g. a VPN overlay bound on a TUN device). An
-    /// address contained in any of `nets` is never stored, published, or offered
-    /// as a holepunch / NAT-traversal candidate.
-    pub fn exclude_direct_addrs(self, nets: impl IntoIterator<Item = IpNet>) -> Self {
-        self.direct_addr_filter(nets.into_iter().collect::<Vec<IpNet>>())
     }
 
     /// Sets the initial user-defined data to be published in Address Lookup's for this node.
@@ -2181,7 +2134,7 @@ mod tests {
     use tokio::sync::oneshot;
     use tracing::{Instrument, debug_span, error_span, info, info_span, instrument};
 
-    use super::{DirectAddrFilter, Endpoint};
+    use super::Endpoint;
     use crate::{
         RelayMap, RelayMode,
         address_lookup::memory::MemoryLookup,
@@ -2196,20 +2149,6 @@ mod tests {
     };
 
     const TEST_ALPN: &[u8] = b"n0/iroh/test";
-
-    #[test]
-    fn vec_ipnet_direct_addr_filter_excludes_contained() {
-        let nets: Vec<ipnet::IpNet> =
-            vec!["100.64.0.0/10".parse().unwrap(), "200::/7".parse().unwrap()];
-        // Addresses inside the excluded ranges are dropped.
-        assert!(!nets.keeps(IpAddr::from_str("100.64.1.2").unwrap()));
-        assert!(!nets.keeps(IpAddr::from_str("200::1").unwrap()));
-        // Everything else is kept.
-        assert!(nets.keeps(IpAddr::from_str("192.168.1.5").unwrap()));
-        assert!(nets.keeps(IpAddr::from_str("2001:db8::1").unwrap()));
-        // An empty list keeps every address.
-        assert!(Vec::<ipnet::IpNet>::new().keeps(IpAddr::from_str("100.64.1.2").unwrap()));
-    }
 
     #[tokio::test]
     #[traced_test]
