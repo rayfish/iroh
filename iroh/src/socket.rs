@@ -1890,6 +1890,13 @@ impl Actor {
                 .or_insert((DirectAddrType::Config, false));
         }
 
+        // Add external addresses the network monitor knows about.
+        for addr in &self.network_state.external_addrs {
+            addrs
+                .entry(*addr)
+                .or_insert((DirectAddrType::Config, false));
+        }
+
         // Finally create and store store all these direct addresses
         let direct_addr_filter = self.sock.direct_addr_filter.clone();
         let stored_addrs = addrs
