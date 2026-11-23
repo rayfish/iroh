@@ -253,10 +253,6 @@ impl IpTransport {
         self.local_addr.watch()
     }
 
-    pub(super) fn max_transmit_segments(&self) -> NonZeroUsize {
-        self.socket.max_gso_segments()
-    }
-
     pub(super) fn max_receive_segments(&self) -> NonZeroUsize {
         self.socket.gro_segments()
     }
@@ -280,6 +276,7 @@ impl IpTransport {
         let sender = self.socket.clone().create_sender();
         IpSender {
             config: self.config,
+            socket: self.socket.clone(),
             sender,
             metrics: self.metrics.clone(),
         }
@@ -312,12 +309,17 @@ impl IpNetworkChangeSender {
 #[pin_project]
 pub(super) struct IpSender {
     config: Config,
+    socket: Arc<UdpSocket>,
     #[pin]
     sender: UdpSender,
     metrics: Arc<SocketMetrics>,
 }
 
 impl IpSender {
+    pub(super) fn max_transmit_segments(&self) -> NonZeroUsize {
+        self.socket.max_gso_segments()
+    }
+
     pub(super) fn is_valid_send_addr(&self, src: Option<IpAddr>, dst: &SocketAddr) -> bool {
         self.config.is_valid_send_addr(src, *dst)
     }
@@ -384,6 +386,14 @@ pub(super) struct IpTransportsSender {
 }
 
 impl IpTransportsSender {
+    pub(super) fn max_transmit_segments(&self) -> Option<NonZeroUsize> {
+        self.v4
+            .iter()
+            .chain(&self.v6)
+            .map(IpSender::max_transmit_segments)
+            .min()
+    }
+
     pub(super) fn v4_iter_mut(&mut self) -> impl Iterator<Item = &mut IpSender> {
         self.v4.iter_mut()
     }

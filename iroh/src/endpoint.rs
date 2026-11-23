@@ -2228,6 +2228,81 @@ mod tests {
         Ok(())
     }
 
+    /// A connection must stop batching once noq-udp halts GSO on its socket.
+    ///
+    /// `SO_NO_CHECK` makes Linux refuse every segmented UDP send, like a NIC
+    /// without TX checksum offload on kernels before 6.11. noq-udp then lowers
+    /// the socket's segment limit to 1; a connection that kept its limit from
+    /// setup sent only failing batches and the transfer stalled until timeout.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[traced_test]
+    async fn transfer_survives_gso_send_failure() -> Result {
+        use std::os::fd::AsRawFd;
+
+        const REPLY_SIZE: usize = 256 * 1024;
+
+        let server = Endpoint::builder(presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .clear_ip_transports()
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?
+            .configure_socket(|sock: socket2::SockRef<'_>, _domain: socket2::Domain| {
+                if sock.r#type()? != socket2::Type::DGRAM {
+                    return Ok(());
+                }
+                let on: libc::c_int = 1;
+                // SAFETY: the descriptor is a live socket borrowed for this call,
+                // and the option value points to a `c_int` of the passed length.
+                let rc = unsafe {
+                    libc::setsockopt(
+                        sock.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_NO_CHECK,
+                        (&on as *const libc::c_int).cast(),
+                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                    )
+                };
+                if rc == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            })
+            .bind()
+            .await?;
+        let server_addr = server.addr();
+
+        let server_task = tokio::spawn({
+            let server = server.clone();
+            async move {
+                let conn = server.accept().await.anyerr()?.await.anyerr()?;
+                let (mut send, mut recv) = conn.accept_bi().await.anyerr()?;
+                recv.read_to_end(16).await.anyerr()?;
+                send.write_all(&vec![7u8; REPLY_SIZE]).await.anyerr()?;
+                send.finish().anyerr()?;
+                conn.closed().await;
+                Ok::<_, Error>(())
+            }
+        });
+
+        let client = Endpoint::builder(presets::Minimal).bind().await?;
+        let conn = client.connect(server_addr, TEST_ALPN).await?;
+        let (mut send, mut recv) = conn.open_bi().await.anyerr()?;
+        send.write_all(b"ping").await.anyerr()?;
+        send.finish().anyerr()?;
+        let reply = time::timeout(Duration::from_secs(10), recv.read_to_end(REPLY_SIZE))
+            .await
+            .std_context("reply stalled after GSO sends failed")?
+            .anyerr()?;
+        assert_eq!(reply.len(), REPLY_SIZE);
+
+        conn.close(0u32.into(), b"done");
+        server_task.await.anyerr()??;
+        client.close().await;
+        server.close().await;
+        Ok(())
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test_connect_empty_alpn() -> Result {
